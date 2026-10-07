@@ -1,0 +1,186 @@
+# GeoScribe Social (this fork of Postiz) on the Hetzner services box, behind
+# that box's Traefik (HTTPS via Let's Encrypt), following the same pattern as
+# the other projects in /opt.
+#
+# Lives on the server as /opt/postiz/docker-compose.yaml, next to
+# dynamicconfig/development-sql.yaml (Temporal), .env (never committed) and
+# src/ (a clone of this repository, which the image is built from).
+# .env holds POSTIZ_DOMAIN, JWT_SECRET, DB_PASSWORD, TEMPORAL_DB_PASSWORD and
+# every optional key (social apps, AI); it is passed whole into the app.
+#
+# Deploying a new version (the build is capped so it cannot starve the other
+# projects on the box):
+#
+#   cd /opt/postiz/src && git pull
+#   DOCKER_BUILDKIT=0 docker build --memory=7g --memory-swap=7g --cpuset-cpus=0-2 \
+#     -f Dockerfile.dev -t postiz-geoscribe:latest \
+#     --build-arg NEXT_PUBLIC_VERSION=$(git rev-parse --short HEAD) .
+#   cd /opt/postiz && docker compose up -d
+#
+# Differences from the stock docker-compose.yaml: no host ports, no fixed
+# container names, service names that cannot clash with other projects on the
+# shared proxy network, named volumes for Temporal, and a locally built image.
+
+name: postiz
+
+services:
+  postiz:
+    image: postiz-geoscribe:latest
+    pull_policy: never
+    restart: unless-stopped
+    env_file:
+      - .env
+    environment:
+      MAIN_URL: https://${POSTIZ_DOMAIN}
+      FRONTEND_URL: https://${POSTIZ_DOMAIN}
+      NEXT_PUBLIC_BACKEND_URL: https://${POSTIZ_DOMAIN}/api
+      BACKEND_INTERNAL_URL: http://localhost:3000
+      JWT_SECRET: ${JWT_SECRET}
+      DATABASE_URL: postgresql://postiz:${DB_PASSWORD}@postiz-postgres:5432/postiz
+      REDIS_URL: redis://postiz-redis:6379
+      TEMPORAL_ADDRESS: postiz-temporal:7233
+      IS_GENERAL: 'true'
+      # The first account can still be created; after that sign-up is closed.
+      DISABLE_REGISTRATION: 'true'
+
+      STORAGE_PROVIDER: local
+      UPLOAD_DIRECTORY: /uploads
+      NEXT_PUBLIC_UPLOAD_DIRECTORY: /uploads
+
+      API_LIMIT: '30'
+      NX_ADD_PLUGINS: 'false'
+    volumes:
+      - postiz-config:/config/
+      - postiz-uploads:/uploads/
+    networks:
+      - internal
+      - temporal
+      - dokploy-network
+    depends_on:
+      postiz-postgres:
+        condition: service_healthy
+      postiz-redis:
+        condition: service_healthy
+      postiz-temporal:
+        condition: service_started
+    labels:
+      - 'traefik.enable=true'
+      - 'traefik.docker.network=dokploy-network'
+      - 'traefik.http.routers.postiz.rule=Host(`${POSTIZ_DOMAIN}`)'
+      - 'traefik.http.routers.postiz.entrypoints=websecure'
+      - 'traefik.http.routers.postiz.tls.certresolver=letsencrypt'
+      - 'traefik.http.services.postiz.loadbalancer.server.port=5000'
+      - 'traefik.http.routers.postiz-web.rule=Host(`${POSTIZ_DOMAIN}`)'
+      - 'traefik.http.routers.postiz-web.entrypoints=web'
+      - 'traefik.http.routers.postiz-web.middlewares=postiz-https'
+      - 'traefik.http.middlewares.postiz-https.redirectscheme.scheme=https'
+
+  postiz-postgres:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: postiz
+      POSTGRES_USER: postiz
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - internal
+    healthcheck:
+      test: pg_isready -U postiz -d postiz
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  postiz-redis:
+    image: redis:7.2
+    restart: unless-stopped
+    volumes:
+      - redisdata:/data
+    networks:
+      - internal
+    healthcheck:
+      test: redis-cli ping
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  # -----------------------
+  # Temporal Stack
+  # -----------------------
+  postiz-temporal-es:
+    image: elasticsearch:7.17.27
+    restart: unless-stopped
+    environment:
+      - cluster.routing.allocation.disk.threshold_enabled=true
+      - cluster.routing.allocation.disk.watermark.low=512mb
+      - cluster.routing.allocation.disk.watermark.high=256mb
+      - cluster.routing.allocation.disk.watermark.flood_stage=128mb
+      - discovery.type=single-node
+      - ES_JAVA_OPTS=-Xms256m -Xmx256m
+      - xpack.security.enabled=false
+    mem_limit: 1g
+    volumes:
+      - temporal-esdata:/usr/share/elasticsearch/data
+    networks:
+      - temporal
+    healthcheck:
+      test: curl -fs http://localhost:9200/_cluster/health || exit 1
+      interval: 10s
+      timeout: 5s
+      retries: 12
+      start_period: 30s
+
+  postiz-temporal-postgres:
+    image: postgres:16
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: temporal
+      POSTGRES_PASSWORD: ${TEMPORAL_DB_PASSWORD}
+    volumes:
+      - temporal-pgdata:/var/lib/postgresql/data
+    networks:
+      - temporal
+    healthcheck:
+      test: pg_isready -U temporal
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  postiz-temporal:
+    image: temporalio/auto-setup:1.28.1
+    restart: unless-stopped
+    depends_on:
+      postiz-temporal-postgres:
+        condition: service_healthy
+      postiz-temporal-es:
+        condition: service_healthy
+    environment:
+      - DB=postgres12
+      - DB_PORT=5432
+      - POSTGRES_USER=temporal
+      - POSTGRES_PWD=${TEMPORAL_DB_PASSWORD}
+      - POSTGRES_SEEDS=postiz-temporal-postgres
+      - DYNAMIC_CONFIG_FILE_PATH=config/dynamicconfig/development-sql.yaml
+      - ENABLE_ES=true
+      - ES_SEEDS=postiz-temporal-es
+      - ES_VERSION=v7
+      - TEMPORAL_NAMESPACE=default
+    networks:
+      - temporal
+    volumes:
+      - ./dynamicconfig:/etc/temporal/config/dynamicconfig
+
+volumes:
+  pgdata:
+  redisdata:
+  postiz-config:
+  postiz-uploads:
+  temporal-pgdata:
+  temporal-esdata:
+
+networks:
+  internal:
+  temporal:
+  dokploy-network:
+    external: true

@@ -40,9 +40,9 @@ export const ChartSocial: FC<{
 
   const colorSchemes = {
     purple: {
-      start: 'rgba(97, 43, 211, 0.8)',
-      end: 'rgba(97, 43, 211, 0.1)',
-      border: 'rgb(97, 43, 211)',
+      start: 'rgba(208, 3, 20, 0.8)',
+      end: 'rgba(208, 3, 20, 0.1)',
+      border: 'rgb(208, 3, 20)',
     },
     green: {
       start: 'rgba(50, 213, 131, 0.8)',
@@ -104,10 +104,10 @@ export const ChartSocial: FC<{
           },
           tooltip: {
             enabled: true,
-            backgroundColor: mode === 'dark' ? '#1e1d1d' : '#fff',
+            backgroundColor: mode === 'dark' ? '#1d1b17' : '#fff',
             titleColor: mode === 'dark' ? '#fff' : '#000',
             bodyColor: mode === 'dark' ? '#9c9c9c' : '#777',
-            borderColor: mode === 'dark' ? '#2b2b2b' : '#e7e9eb',
+            borderColor: mode === 'dark' ? '#2a2823' : '#e7e9eb',
             borderWidth: 1,
             padding: 10,
             cornerRadius: 8,
@@ -137,7 +137,7 @@ export const ChartSocial: FC<{
             pointRadius: 0,
             pointHoverRadius: 6,
             pointHoverBackgroundColor: colors.border,
-            pointHoverBorderColor: mode === 'dark' ? '#1e1d1d' : '#fff',
+            pointHoverBorderColor: mode === 'dark' ? '#1d1b17' : '#fff',
             pointHoverBorderWidth: 2,
           },
         ],
